@@ -1,0 +1,6 @@
+{
+  "name": "side",
+  "version": "0.1.0",
+  "description": "A side pane that shows the agent's unchecked assumptions and takes side notes it reads every turn",
+  "types": "./types/index.d.ts"
+}

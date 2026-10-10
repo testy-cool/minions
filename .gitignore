@@ -1,0 +1,4 @@
+agents/
+vendor/
+claude-mods/*/.claude-plugin/types/
+claude-mods/*/tsconfig.json

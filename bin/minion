@@ -1,0 +1,480 @@
+#!/usr/bin/env bash
+# minion: isolated Pi agents. Each agent is one folder:
+#   AGENTS.md   who it is
+#   memory/     what it remembers (MEMORY.md, USER.md)
+#   skills/     its own skills (links to skills already on this machine)
+#   mcp.json    its own MCP servers
+#   sessions/   every chat transcript; sessions.md lists them
+#   .pi-home/   its own Pi settings and sessions
+# Nothing mixes with other agents or with ~/.pi/agent. Only auth and the
+# model list are shared, by symlink.
+set -euo pipefail
+
+ROOT=$(realpath -m "${MINIONS_HOME:-$(dirname "$(dirname "$(readlink -f "$0")")")/agents}")
+BASE="$HOME/.pi/agent"
+HERMES="$BASE/npm/node_modules/pi-hermes-memory"
+MCPORTER="$BASE/npm/node_modules/pi-mcporter"
+# Helper agents (Agent tool); their types are shared from $BASE/agents, where
+# Explore runs on DeepSeek V4.1 Flash for fast searches.
+SUBAGENTS="$BASE/npm/node_modules/@tintinweb/pi-subagents"
+FACE="$(dirname "$(readlink -f "$0")")/minion-face"
+# Animated portrait in the chat screen, from github.com/testy-cool/pi-agent-portrait.
+EMOTE="$(dirname "$(dirname "$(readlink -f "$0")")")/vendor/pi-agent-portrait"
+# Claude-based minions run Claude Code with this mod: the animated portrait
+# and what the minion is doing, above the prompt.
+CLAUDE_MOD="$(dirname "$(dirname "$(readlink -f "$0")")")/claude-mods/minion-avatar"
+# A Claude minion's model and effort live here; the file also marks the
+# folder as a Claude minion, as .pi-home marks a Pi one.
+CLAUDE_CONF=.claude-minion.json
+# Where skills are looked for; the first one with a given name wins.
+SKILL_DIRS=("$HOME/.agents/skills" "$HOME/.agents/skills-public" "$HOME/.claude/skills" "$BASE/skills")
+
+usage() {
+  cat <<U
+usage:
+  minion init                  create an agent, asking questions (run it
+                               from a folder the agent should work on)
+  minion new <name> "<role>"   create an agent without questions
+  minion new <name> "<role>" --claude
+                               the same, running on Claude Code instead of Pi
+  minion ls                    list agents
+  minion prompt <name>         edit the agent's prompt (AGENTS.md)
+  minion model <name>          pick the agent's model and thinking level
+  minion face <name> [photo]   draw the agent's portrait from its name and
+                               role, or as a likeness of a photo (Codex, else
+                               Azure gpt-image-2.5; about two minutes)
+  minion skills <name>         pick the agent's skills (tab to toggle)
+  minion mcp <name>            pick the agent's MCP servers (tab to toggle)
+  minion <name>                start a new chat
+  minion <name> -p "<msg>"     one message in a new chat, print the reply
+  minion <name> -c [...]       continue the last chat (works with -p)
+  minion <name> chats          list past chats, numbered, newest first
+  minion <name> @N [...]       continue chat number N (works with -p)
+  minion <name> -r             pick a chat to continue from a menu
+  minion <name> [pi args...]   any other pi flags
+new agents copy the "default" agent: edit it with the commands above
+agents live in $ROOT
+U
+}
+
+# Command words cannot be minion names, or "minion <name>" would never reach them.
+RESERVED=" init new ls skills mcp model prompt face chats "
+
+check_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || { echo "bad name: $1 (letters, digits, . _ - only)" >&2; exit 1; }
+  [[ "$RESERVED" != *" $1 "* ]] || { echo "\"$1\" is a command word, pick another name" >&2; exit 1; }
+}
+
+agent_dir() {
+  local dir="$ROOT/$1"
+  [[ -d "$dir/.pi-home" || -f "$dir/$CLAUDE_CONF" ]] || { echo "no agent: $1 (minion ls)" >&2; exit 1; }
+  echo "$dir"
+}
+
+is_claude() { [[ -f "$(agent_dir "$1")/$CLAUDE_CONF" ]]; }
+
+# Claude Code keeps a folder's sessions and memory under ~/.claude/projects,
+# named after the folder's path with every other character turned into "-".
+claude_project() { echo "$HOME/.claude/projects/$(sed 's/[^A-Za-z0-9]/-/g' <<<"$1")"; }
+
+new_claude_agent() {
+  check_name "$1"
+  local name="$1" role="$2" dir="$ROOT/$1" tpl="$ROOT/default"
+  [[ -e "$dir" ]] && { echo "exists: $dir" >&2; exit 1; }
+  [[ -d "$tpl/.pi-home" ]] || new_agent default "" >/dev/null
+  trap "rm -rf -- $(printf %q "$dir")" EXIT
+  mkdir -p "$dir/skills" "$dir/memory" "$dir/notes" "$dir/.claude"
+  echo '{ "model": "opus", "effort": "" }' > "$dir/$CLAUDE_CONF"
+  # The same starting skills as every minion; Claude Code finds them as the
+  # project's skills.
+  find "$tpl/skills" -mindepth 1 -maxdepth 1 -type l -exec cp -P {} "$dir/skills/" \;
+  ln -s ../skills "$dir/.claude/skills"
+  # Claude Code's own memory for this folder lands in memory/, so everything
+  # the minion remembers is in one visible place, as with Pi minions.
+  local project; project=$(claude_project "$dir")
+  mkdir -p "$project"
+  [[ -e "$project/memory" ]] || ln -s "$dir/memory" "$project/memory"
+  cat > "$dir/AGENTS.md" <<A
+# $name
+
+$role
+
+Your folder is $dir. Keep notes on your subject in notes/. What you learn
+about the user and the work goes in your memory, which lives in memory/.
+A
+  trap - EXIT
+  echo "created $dir (Claude Code)"
+}
+
+# Choose a Claude minion's model and effort.
+pick_claude_model() {
+  local dir; dir=$(agent_dir "$1")
+  local model effort
+  model=$(printf '%s\n' opus sonnet fable haiku | fzf --header="pick the model for $1" --no-sort) \
+    || { echo "cancelled, nothing changed"; return; }
+  effort=$(printf '%s\n' default low medium high xhigh max | fzf --header="effort" --no-sort) \
+    || { echo "cancelled, nothing changed"; return; }
+  [[ "$effort" == default ]] && effort=""
+  python3 -c 'import json, sys; json.dump({"model": sys.argv[2], "effort": sys.argv[3]}, open(sys.argv[1], "w"))' \
+    "$dir/$CLAUDE_CONF" "$model" "$effort"
+  echo "model: $model, effort ${effort:-default}"
+}
+
+new_agent() {
+  check_name "$1"
+  local name="$1" role="$2" dir="$ROOT/$1" home="$ROOT/$1/.pi-home"
+  [[ -e "$dir" ]] && { echo "exists: $dir" >&2; exit 1; }
+  # Every minion starts as a copy of "default": its prompt, skills, MCP
+  # servers and model. "default" itself is made from the normal Pi setup.
+  local tpl="$ROOT/default" settings_src="$BASE/settings.json"
+  if [[ "$name" != default ]]; then
+    [[ -d "$tpl/.pi-home" ]] || new_agent default "" >/dev/null
+    settings_src="$tpl/.pi-home/settings.json"
+  fi
+  # If any step below fails, set -e ends the script and this removes the
+  # half-made folder, so a retry does not hit "exists".
+  trap "rm -rf -- $(printf %q "$dir")" EXIT
+  mkdir -p "$home" "$dir/skills" "$dir/memory"
+  ln -s "$BASE/auth.json" "$home/auth.json"
+  ln -s "$BASE/models.json" "$home/models.json"
+  ln -s "$BASE/agents" "$home/agents"
+  mkdir -p "$home/sessions" "$dir/memory/projects"
+  ln -s .pi-home/sessions "$dir/sessions"
+  # The memory plugin keeps "project" facts under the Pi home; send them
+  # into memory/ so everything the agent remembers is in one visible place.
+  ln -s ../memory/projects "$home/projects-memory"
+  python3 - "$settings_src" "$home/settings.json" "$dir/skills" "$name" "$HERMES" "$MCPORTER" "$EMOTE" "$SUBAGENTS" <<'PY'
+import json, os, sys
+src, dst, skills, name, *packages = sys.argv[1:]
+s = json.load(open(src))
+keep = {k: s[k] for k in ("defaultModel", "defaultProvider", "defaultThinkingLevel", "theme") if k in s}
+# "default" gets the standard extensions; other minions copy default's list.
+if name != "default":
+    packages = s.get("packages", packages)
+# Local paths that no longer exist are dropped; npm:, git: and object
+# entries are kept as they are.
+packages = [p for p in packages if not (isinstance(p, str) and p.startswith("/")) or os.path.isdir(p)]
+keep.update(quietStartup=True, packages=packages, skills=[skills])
+json.dump(keep, open(dst, "w"), indent=2)
+PY
+  # Memory goes straight into the prompt, so the agent always knows it.
+  python3 -c 'import json, sys; json.dump({"memoryMode": "legacy-inject", "memoryDir": sys.argv[1]}, open(sys.argv[2], "w"))' \
+    "$dir/memory" "$home/hermes-memory-config.json"
+  echo '{ "version": 1, "defaultExposure": "index" }' > "$home/mcporter.json"
+  # Trust the minion's own folder up front, so Pi neither asks on start nor
+  # warns that it is untrusted; its .pi/ only holds pi-emote's face files.
+  python3 -c 'import json, sys; json.dump({sys.argv[1]: True}, open(sys.argv[2], "w"))' "$dir" "$home/trust.json"
+  if [[ "$name" == default ]]; then
+    # "imports": [] stops MCPorter from pulling in every server from the
+    # Claude, Codex and Cursor configs; the agent sees only what is listed.
+    echo '{ "imports": [], "mcpServers": {} }' > "$dir/mcp.json"
+    # {{name}} and {{role}} are filled in for each new minion.
+    cat > "$dir/AGENTS.md" <<'A'
+# {{name}}
+
+{{role}}
+
+You have long-term memory tools. When you learn something about the user,
+their work or your job that will matter in a later conversation, save it.
+
+Your past chats are listed in sessions.md, newest first, and the full
+transcripts are in sessions/. To find something from an earlier chat, use
+session_search, or read sessions.md and open the transcript.
+A
+  else
+    cp "$tpl/mcp.json" "$dir/mcp.json"
+    find "$tpl/skills" -mindepth 1 -maxdepth 1 -type l -exec cp -P {} "$dir/skills/" \;
+    python3 - "$tpl/AGENTS.md" "$dir/AGENTS.md" "$name" "$role" <<'PY'
+import sys
+src, dst, name, role = sys.argv[1:]
+text = open(src).read().replace("{{name}}", name).replace("{{role}}", role)
+open(dst, "w").write(text)
+PY
+  fi
+  trap - EXIT
+  echo "created $dir"
+}
+
+# Choose the minion's model and thinking level from what Pi can use.
+pick_model() {
+  local dir; dir=$(agent_dir "$1")
+  local line level
+  line=$(pi --list-models 2>/dev/null | tail -n +2 | fzf --header="pick the model for $1 (type to search)" --header-lines=0) \
+    || { echo "cancelled, nothing changed"; return; }
+  level=$(printf '%s\n' off minimal low medium high xhigh max | fzf --header="thinking level" --no-sort) \
+    || { echo "cancelled, nothing changed"; return; }
+  python3 - "$dir/.pi-home/settings.json" "$line" "$level" <<'PY'
+import json, sys
+path, line, level = sys.argv[1:]
+provider, model = line.split()[:2]
+s = json.load(open(path))
+s.update(defaultProvider=provider, defaultModel=model, defaultThinkingLevel=level)
+json.dump(s, open(path, "w"), indent=2)
+print(f"model: {provider}/{model}, thinking {level}")
+PY
+}
+
+ask() { local a; read -r -p "$1" a </dev/tty; echo "$a"; }
+
+# The role is the first line of text after the title in AGENTS.md.
+agent_role() { awk 'NR > 1 && NF { print; exit }' "$(agent_dir "$1")/AGENTS.md"; }
+
+face_in_background() {
+  local dir; dir=$(agent_dir "$1")
+  mkdir -p "$dir/.pi"
+  setsid bash -c '
+    if "$0" "$1" "$2" "$3" > "$1/.pi/face.log" 2>&1
+    then notify-send "minion $2" "Face ready. See it with: minion $2"
+    else notify-send "minion $2" "Drawing the face failed, see $1/.pi/face.log"
+    fi
+  ' "$FACE" "$dir" "$1" "$(agent_role "$1")" </dev/null >/dev/null 2>&1 &
+}
+
+# minion init with no arguments: asks for name and role, whether the
+# folder it was run from matters to the minion, and whether to analyse it.
+init_interactive() {
+  local here name role relevant how face engine
+  here=$(pwd)
+  [[ -t 0 ]] || { echo "minion init needs a terminal; use: minion new <name> \"<role>\"" >&2; exit 1; }
+  name=$(ask "Name [$(basename "$here")]: ")
+  name=${name:-$(basename "$here")}
+  check_name "$name"
+  [[ -e "$ROOT/$name" ]] && { echo "exists: $ROOT/$name" >&2; exit 1; }
+  role=$(ask "What is it for? One line: ")
+  [[ -n "$role" ]] || { echo "a role is needed" >&2; exit 1; }
+  face=$(ask "Draw a portrait for $name? About two minutes, in the background [y/N]: ")
+  relevant=$(ask "Is this folder relevant to $name? $here [y/N]: ")
+  engine=$(ask "Run $name on Claude Code instead of Pi? [y/N]: ")
+  if [[ "$engine" == [yY]* ]]; then new_claude_agent "$name" "$role"; else new_agent "$name" "$role"; fi
+  if [[ "$face" == [yY]* ]]; then
+    face_in_background "$name"
+    echo "drawing the face in the background; you get a notification when it is done"
+  fi
+  if [[ "$relevant" != [yY]* ]]; then
+    echo "start it with: minion $name"
+    return
+  fi
+  cat >> "$ROOT/$name/AGENTS.md" <<W
+
+Your work folder is $here. The user's material for your job lives there.
+Your own files (memory, notes, sessions) stay in your agent folder.
+W
+  echo "Analyse $here now?"
+  echo "  1) no"
+  echo "  2) yes, in the background; you get a notification when it is done"
+  echo "  3) yes, now, and we talk when it is done"
+  how=$(ask "[1/2/3]: ")
+  local prompt
+  prompt="Analyse the folder $here: what it is, how it is organised, the important"
+  prompt+=" files, how it is run or used, and anything you would need to know to work"
+  prompt+=" in it. Write what you find to notes/$(basename "$here").md in your own"
+  prompt+=" folder, and save the most important facts to memory."
+  mkdir -p "$ROOT/$name/notes"
+  case "$how" in
+    2)
+      setsid bash -c '
+        if "$0" "$1" -p "$2" > "$3" 2>&1
+        then notify-send "minion $1" "Done analysing the folder. Talk about it with: minion $1 -c"
+        else notify-send "minion $1" "Analysing the folder failed, see $3"
+        fi
+      ' "$(readlink -f "$0")" "$name" "$prompt" "$ROOT/$name/notes/analysis.log" \
+        </dev/null >/dev/null 2>&1 &
+      echo "analysing in the background; output in $ROOT/$name/notes/analysis.log"
+      echo "when notified, talk about it with: minion $name -c"
+      ;;
+    3) exec "$(readlink -f "$0")" "$name" "$prompt When you are done, give me a short summary and ask what I want to do." ;;
+    *) echo "start it with: minion $name" ;;
+  esac
+}
+
+# Rewrite sessions.md: one line per chat, newest first, with its start time,
+# how many messages the user sent, the first message and the transcript path.
+write_toc() {
+  python3 - "$1" <<'TOC'
+import glob, json, os, sys
+dir = sys.argv[1]
+rows = []
+for f in glob.glob(os.path.join(dir, ".pi-home/sessions/*/*.jsonl")):
+    start, first, n = "", "", 0
+    for line in open(f, errors="replace"):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("type") == "session":
+            start = e.get("timestamp", "")
+        m = e.get("message") or {}
+        if e.get("type") == "message" and m.get("role") == "user":
+            n += 1
+            if not first:
+                c = m.get("content")
+                if isinstance(c, list):
+                    c = " ".join(p.get("text", "") for p in c if isinstance(p, dict))
+                first = " ".join(str(c).split())[:100]
+    rel = os.path.relpath(f, os.path.join(dir, ".pi-home"))
+    shown = start[:16].replace("T", " ")
+    rows.append((start, f"{shown} UTC, {n} messages: {first}\n  `{rel}`"))
+rows.sort(reverse=True)
+with open(os.path.join(dir, "sessions.md"), "w") as out:
+    out.write("# Past chats, newest first\n\n")
+    out.write("\n".join(f"{i}. {r}" for i, (_, r) in enumerate(rows, 1)) + "\n")
+TOC
+}
+
+# pick <current names, one per line> : reads "name<TAB>description" lines on
+# stdin, opens fzf with the current names already ticked, prints the chosen
+# names. The cursor starts on "(none)", so Enter with nothing ticked clears.
+pick() {
+  local current="$1" list binds="" i=1
+  list=$(printf '(none)\tuntick everything and press enter to clear\n'; cat)
+  while IFS=$'\t' read -r n _; do
+    i=$((i + 1))
+    if grep -qxF "$n" <<<"$current"; then binds+="+pos($i)+toggle"; fi
+  done < <(tail -n +2 <<<"$list")
+  local out
+  out=$(fzf --multi --delimiter=$'\t' --with-nth=1,2 --tabstop=24 \
+    --header="tab: tick/untick   enter: save   esc: cancel" \
+    --bind "load:first${binds}+first" <<<"$list") || return 1
+  cut -f1 <<<"$out" | grep -vxF '(none)' || true
+}
+
+pick_skills() {
+  local dir; dir=$(agent_dir "$1")
+  local catalog current chosen
+  catalog=$(python3 - "${SKILL_DIRS[@]}" <<'PY'
+import os, sys, re
+seen = {}
+for root in sys.argv[1:]:
+    if not os.path.isdir(root): continue
+    for name in sorted(os.listdir(root)):
+        base = os.path.join(root, name)
+        for sub in ("", "agents"):
+            f = os.path.join(base, sub, "SKILL.md")
+            if os.path.isfile(f) and name not in seen:
+                text = open(f, errors="replace").read(4000)
+                m = re.search(r"^description:\s*(.+)$", text, re.M)
+                desc = (m.group(1).strip().strip("\"'") if m else "")[:120]
+                seen[name] = (os.path.realpath(os.path.dirname(f)), desc)
+for name in sorted(seen):
+    path, desc = seen[name]
+    print(f"{name}\t{desc}\t{path}")
+PY
+)
+  current=$(find "$dir/skills" -mindepth 1 -maxdepth 1 -type l -printf '%f\n')
+  chosen=$(pick "$current" <<<"$catalog") || { echo "cancelled, nothing changed"; return; }
+  # Only links are managed here; skills the agent wrote itself are kept.
+  find "$dir/skills" -mindepth 1 -maxdepth 1 -type l -delete
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    ln -s "$(awk -F'\t' -v n="$n" '$1 == n {print $3}' <<<"$catalog")" "$dir/skills/$n"
+  done <<<"$chosen"
+  echo "$1 skills: $(find "$dir/skills" -mindepth 1 -maxdepth 1 -printf '%f ' )"
+}
+
+pick_mcp() {
+  local dir; dir=$(agent_dir "$1")
+  local all catalog current chosen
+  echo "reading MCP servers from your Claude, Codex and Cursor configs..." >&2
+  # The catalog holds API keys, so it goes through a private file, never
+  # through command-line arguments that other processes can read.
+  all=$(mktemp); chmod 600 "$all"
+  trap "rm -f -- $(printf %q "$all")" RETURN
+  { (cd /tmp && mcporter config list --json --source import 2>/dev/null); echo
+    (cd /tmp && mcporter config list --json --source local 2>/dev/null); } | python3 -c '
+import json, sys
+out = {}
+for blob in sys.stdin.read().split("\n{"):
+    blob = blob if blob.startswith("{") else "{" + blob
+    try:
+        servers = json.loads(blob)["servers"]
+    except (ValueError, KeyError):
+        continue
+    for s in servers:
+        out.setdefault(s["name"], s)
+json.dump(out, open(sys.argv[1], "w"))' "$all"
+  catalog=$(python3 -c '
+import json, sys
+for n, s in sorted(json.load(open(sys.argv[1])).items()):
+    if n == "serena": continue  # kept off on purpose on this machine
+    where = s.get("baseUrl") or " ".join([s.get("command", "")] + s.get("args", []))
+    kind = s["source"].get("importKind", "mcporter")
+    print(f"{n}\t{kind}: {where[:90]}")' "$all")
+  current=$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["mcpServers"]))' "$dir/mcp.json")
+  chosen=$(pick "$current" <<<"$catalog") || { echo "cancelled, nothing changed"; return; }
+  python3 - "$all" "$dir/mcp.json" "$chosen" <<'PY'
+import json, sys
+all_, dst, chosen = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3].split()
+# Copy every setting MCPorter reported (cwd, env, headers, auth, ...)
+# except its own bookkeeping fields.
+skip = {"name", "source", "transport"}
+servers = {n: {k: v for k, v in all_[n].items() if k not in skip} for n in chosen if n in all_}
+json.dump({"imports": [], "mcpServers": servers}, open(dst, "w"), indent=2)
+print("mcp servers:", " ".join(servers) or "(none)")
+PY
+}
+
+case "${1:-}" in
+  ""|-h|--help) usage ;;
+  init) if [[ $# -eq 1 ]]; then init_interactive; exit; fi
+    [[ $# -eq 3 ]] || { usage; exit 1; }; new_agent "$2" "$3" ;;
+  new) if [[ $# -eq 4 && "$4" == --claude ]]; then new_claude_agent "$2" "$3"; exit; fi
+    [[ $# -eq 3 ]] || { usage; exit 1; }; new_agent "$2" "$3" ;;
+  ls) for d in "$ROOT"/*/; do
+      if [[ -d "$d.pi-home" ]]; then basename "$d"
+      elif [[ -f "$d$CLAUDE_CONF" ]]; then echo "$(basename "$d") (claude)"; fi
+    done ;;
+  skills) [[ $# -eq 2 ]] || { usage; exit 1; }; pick_skills "$2" ;;
+  mcp) [[ $# -eq 2 ]] || { usage; exit 1; }
+    if is_claude "$2"; then echo "$2 runs on Claude Code and uses your Claude Code MCP servers"; exit; fi
+    pick_mcp "$2" ;;
+  model) [[ $# -eq 2 ]] || { usage; exit 1; }
+    if is_claude "$2"; then pick_claude_model "$2"; else pick_model "$2"; fi ;;
+  face) [[ $# -eq 2 || $# -eq 3 ]] || { usage; exit 1; }
+    dir=$(agent_dir "$2"); mkdir -p "$dir/.pi"
+    photo=(); if [[ $# -eq 3 ]]; then photo=("$(realpath "$3")"); fi
+    "$FACE" "$dir" "$2" "$(agent_role "$2")" "${photo[@]+"${photo[@]}"}" ;;
+  prompt) [[ $# -eq 2 ]] || { usage; exit 1; }; dir=$(agent_dir "$2"); "${EDITOR:-nano}" "$dir/AGENTS.md" ;;
+  *)
+    name="$1"; shift
+    dir=$(agent_dir "$name")
+    cd "$dir"
+    if [[ -f "$dir/$CLAUDE_CONF" ]]; then
+      if [[ "${1:-}" == chats || "${1:-}" =~ ^@[0-9]+$ ]]; then
+        echo "$name runs on Claude Code: pick a past chat with minion $name -r" >&2; exit 1
+      fi
+      read -r model effort < <(python3 -c 'import json, sys; c = json.load(open(sys.argv[1])); print(c.get("model") or "-", c.get("effort") or "-")' "$dir/$CLAUDE_CONF")
+      args=(--append-system-prompt-file "$dir/AGENTS.md" --plugin-dir "$CLAUDE_MOD")
+      [[ "$model" != - ]] && args+=(--model "$model")
+      [[ "$effort" != - ]] && args+=(--effort "$effort")
+      exec claude "${args[@]}" "$@"
+    fi
+    # --no-context-files stops Pi from also loading CLAUDE.md/AGENTS.md
+    # from parent folders such as ~, which would leak in other instructions.
+    # --no-skills stops Pi from loading every skill in ~/.agents/skills;
+    # only the agent's own folders are passed in.
+    mkdir -p "$dir/memory/skills"
+    args=(--no-context-files --append-system-prompt "$dir/AGENTS.md"
+      --no-skills --skill "$dir/skills" --skill "$dir/memory/skills")
+    write_toc "$dir"
+    # "chats" prints the numbered list; "@N" continues chat number N from it.
+    # Every other run starts a new chat unless -c or -r is passed to Pi.
+    if [[ "${1:-}" == chats ]]; then cat "$dir/sessions.md"; exit; fi
+    if [[ "${1:-}" =~ ^@([0-9]+)$ ]]; then
+      file=$(grep -oP '^  `\Ksessions/[^`]+' "$dir/sessions.md" | sed -n "${BASH_REMATCH[1]}p")
+      [[ -n "$file" ]] || { echo "no chat number ${BASH_REMATCH[1]} (minion $name chats)" >&2; exit 1; }
+      shift
+      args+=(--session "$dir/$file")
+    fi
+    status=0
+    # Minions with a tracing extension file their traces under their own
+    # name: a Langfuse environment for pi-langfuse, a Phoenix project for
+    # pi-phoenix-otel. Langfuse allows only lowercase letters, digits, - and _.
+    env_name="minion-$(tr 'A-Z.' 'a-z-' <<<"$name")"
+    PI_CODING_AGENT_DIR="$dir/.pi-home" MCPORTER_CONFIG="$dir/mcp.json" \
+      LANGFUSE_TRACING_ENVIRONMENT="$env_name" PHOENIX_PROJECT="$env_name" \
+      pi "${args[@]}" "$@" || status=$?
+    write_toc "$dir"
+    exit $status
+    ;;
+esac

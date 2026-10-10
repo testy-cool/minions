@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Draw a minion's portrait with pi-agent-portrait's draw-portrait script.
+# usage: minion-face <agent folder> <name> <role> [photo]
+# Codex draws it when installed; Azure gpt-image-2.5 is the fallback, with
+# its settings read from the environment.
+set -euo pipefail
+agent="$1" name="$2" role="$3" photo="${4:-}"
+here=$(dirname "$(dirname "$(readlink -f "$0")")")
+
+# Settings for the fallback (AZURE_IMAGE_KEY, AZURE_IMAGE_ENDPOINT,
+# AZURE_IMAGE_MODEL) come from the environment or from this file.
+conf="${XDG_CONFIG_HOME:-$HOME/.config}/minion/env"
+if [[ -f "$conf" ]]; then source "$conf"; fi
+
+args=(--name "$name" --role "$role" --dest "$agent/.pi/extensions/pi-emote")
+if [[ -n "$photo" ]]; then args+=(--photo "$photo"); fi
+exec "$here/vendor/pi-agent-portrait/scripts/draw-portrait" "${args[@]}"

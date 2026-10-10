@@ -1,0 +1,14 @@
+{
+  "name": "minion-avatar",
+  "version": "0.3.0",
+  "description": "Show the minion's animated pi-agent-portrait above the prompt",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "statusRows": {
+      "type": "boolean",
+      "title": "Status rows",
+      "description": "Show model, context, rate limits and the repo beside the portrait, with a bold headline. For sessions with the status line turned off.",
+      "default": false
+    }
+  }
+}
