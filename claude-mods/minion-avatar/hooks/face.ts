@@ -25,3 +25,11 @@ export function faceSize(rows?: unknown): Size {
   const r = typeof rows === 'number' && Number.isInteger(rows) && rows >= 2 && rows <= 12 ? rows : ROWS
   return { rows: r, columns: r * 2, px: r * CELL_PX }
 }
+
+/**
+ * How many rows of space sit above one minion's portrait, from `avatarMarginTop`
+ * in its pi-emote config.json: a whole number from 0 to 4, else none.
+ */
+export function marginTopOf(rows?: unknown): number {
+  return typeof rows === 'number' && Number.isInteger(rows) && rows >= 0 && rows <= 4 ? rows : 0
+}

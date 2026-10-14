@@ -73,6 +73,30 @@ test('a face is 4 rows by 8 columns when the config names no size', async ($, on
   const image: any = await ui.find({ type: 'Image' })
   expect(image.props.rows).toBe(4)
   expect(image.props.columns).toBe(8)
+  const box: any = await ui.find({ key: 'portrait' })
+  expect(box.props.marginTop).toBe(0)
+})
+
+test('a minion whose config asks for a top margin gets its face pushed down', async ($, on) => {
+  fakeSet(on, { avatarMarginTop: 2 })
+  mock.clock(on)
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  const box: any = await ui.find({ key: 'portrait' })
+  expect(box.props.marginTop).toBe(2)
+})
+
+test('a face has no top margin when the config names a bad one', async ($, on) => {
+  fakeSet(on, { avatarMarginTop: 9 })
+  mock.clock(on)
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  const box: any = await ui.find({ key: 'portrait' })
+  expect(box.props.marginTop).toBe(0)
 })
 
 test('/portrait picks up a changed config without a restart', async ($, on) => {
@@ -84,11 +108,13 @@ test('/portrait picks up a changed config without a restart', async ($, on) => {
   await $.session.start({ cwd: '/x' } as any)
   config.avatarRows = 6
   config.avatarPlain = true
+  config.avatarMarginTop = 1
   const said = await $.command.run({ command: 'portrait', args: '' } as any)
   expect(JSON.stringify(said)).toContain('Portrait reloaded')
   const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
   const image: any = await ui.find({ type: 'Image' })
   expect(image.props.rows).toBe(6)
+  expect(((await ui.find({ key: 'portrait' })) as any).props.marginTop).toBe(1)
   expect(image.props.source.file).toBe(`${BASE}/emotes/pm/hi/hi1.png`)
 })
 

@@ -12,7 +12,7 @@ import type {
   StatusLimit,
 } from '../types'
 import { activityOf, partialArgsOf } from './activity-of'
-import { faceSize, site, type Size } from './face'
+import { faceSize, marginTopOf, site, type Size } from './face'
 import { gaugeRow, modelRow, repoRow } from './status'
 import type { Piece } from './status'
 import { latestTurn } from './turn'
@@ -159,15 +159,17 @@ const HOLD: Partial<Record<State, [number, State | 'back']>> = {
   failure: [1400, 'back'], interrupted: [1500, 'idle'], error: [2000, 'idle'],
 }
 
-async function loadSet($: EngineInterface): Promise<{ set: Set; size: Size } | null> {
+async function loadSet($: EngineInterface): Promise<{ set: Set; size: Size; marginTop: number } | null> {
   const root = await $.session.root()
   const base = `${root}/.pi/extensions/pi-emote`
   let name: string | undefined
   let size = faceSize()
+  let marginTop = 0
   let isPlain = false
   try {
     const config = JSON.parse(await $.fs.read(`${base}/config.json`))
     size = faceSize(config.avatarRows)
+    marginTop = marginTopOf(config.avatarMarginTop)
     isPlain = config.avatarPlain === true
     const rules: { model?: string; 'emote-set'?: string }[] = config.emotes ?? []
     const model = (await $.session.model()).toLowerCase()
@@ -199,8 +201,8 @@ async function loadSet($: EngineInterface): Promise<{ set: Set; size: Size } | n
 
   // `avatarPlain` in a minion's config shows its frames as drawn, with no
   // scanlines and no frame.
-  if (isPlain) return { set, size }
-  return { set: await scanlined($, set, dir, `${base}/.scan-${size.px}/${name}`, size.px), size }
+  if (isPlain) return { set, size, marginTop }
+  return { set: await scanlined($, set, dir, `${base}/.scan-${size.px}/${name}`, size.px), size, marginTop }
 }
 
 // Shrinks a frame to its drawn size, darkens every other pixel row and
@@ -251,6 +253,7 @@ const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)]!
 const face = {
   set: null as Set | null,
   size: faceSize(),
+  marginTop: 0,
   state: 'idle' as State,
   working: 'idle' as State,
   frames: [] as string[],
@@ -289,6 +292,7 @@ async function reloadFace($: EngineInterface) {
   const loaded = await loadSet($)
   face.set = loaded?.set ?? null
   face.size = loaded?.size ?? faceSize()
+  face.marginTop = loaded?.marginTop ?? 0
   face.state = 'idle'
   site.band = undefined
   site.file = null
@@ -889,7 +893,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Box flexDirection="row">
           {site.band && file && Image ? (
-            <Box flexShrink={0} marginRight={2}>
+            <Box key="portrait" flexShrink={0} marginRight={2} marginTop={face.marginTop}>
               <Image key="face" source={{ file, format: 'png' }} columns={face.size.columns} rows={face.size.rows} alt=" " />
             </Box>
           ) : null}
