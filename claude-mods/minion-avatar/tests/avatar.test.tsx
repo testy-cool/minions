@@ -7,6 +7,7 @@ const props = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 80
 
 function fakeSet(on: any, config: object = {}) {
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => { const { Box } = $.ui.resolve(e); return <Box key="engine" /> })
+  on('command.register', () => ({ value: undefined }) as any)
   on('session.root', () => ({ value: '/x/teresa' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('fs.read', () => ({ value: JSON.stringify({ emotes: [{ model: '*', 'emote-set': 'pm' }], ...config }) }))
@@ -74,7 +75,25 @@ test('a face is 4 rows by 8 columns when the config names no size', async ($, on
   expect(image.props.columns).toBe(8)
 })
 
+test('/portrait picks up a changed config without a restart', async ($, on) => {
+  const config: any = {}
+  fakeSet(on, config)
+  mock.clock(on)
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  config.avatarRows = 6
+  config.avatarPlain = true
+  const said = await $.command.run({ command: 'portrait', args: '' } as any)
+  expect(JSON.stringify(said)).toContain('Portrait reloaded')
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  const image: any = await ui.find({ type: 'Image' })
+  expect(image.props.rows).toBe(6)
+  expect(image.props.source.file).toBe(`${BASE}/emotes/pm/hi/hi1.png`)
+})
+
 test('draws nothing of its own without a portrait set', async ($, on) => {
+  on('command.register', () => ({ value: undefined }) as any)
   on('session.root', () => ({ value: '/x/elsewhere' }))
   on('session.model', () => ({ value: 'm' }))
   on('fs.read', () => ({ deny: 'missing' }))

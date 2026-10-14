@@ -299,6 +299,19 @@ async function show($: EngineInterface, file: string | undefined) {
   await update($, frame, () => file)
 }
 
+// Reads the set and its size again and greets with it. Forgetting the band
+// makes the next frame redraw it, so a new size takes effect too.
+async function reloadFace($: EngineInterface) {
+  stop()
+  const loaded = await loadSet($)
+  face.set = loaded?.set ?? null
+  face.size = loaded?.size ?? faceSize()
+  face.state = 'idle'
+  site.band = undefined
+  site.file = null
+  go($, 'hi')
+}
+
 function stop() {
   for (const t of [face.ticker, face.hold, face.sleeper, face.blink]) t?.cancel()
   face.ticker = face.hold = face.sleeper = face.blink = null
@@ -457,12 +470,12 @@ export const register: Register = (on, options) => {
   }
 
   on('session.start', async ($, e, next) => {
-    stop()
-    const loaded = await loadSet($)
-    face.set = loaded?.set ?? null
-    face.size = loaded?.size ?? faceSize()
-    face.state = 'idle'
-    go($, 'hi')
+    await $.command.register({
+      name: 'portrait',
+      description: "Reload this minion's portrait: a redrawn face, or a changed size or look",
+      immediate: true,
+    })
+    await reloadFace($)
 
     const result = await next(e)
 
@@ -470,6 +483,12 @@ export const register: Register = (on, options) => {
     $.clock.after(0, () => void refreshStatus($))
 
     return result
+  })
+
+  on('command.run', { command: 'portrait' }, async $ => {
+    await reloadFace($)
+
+    return { text: face.set ? 'Portrait reloaded.' : 'No portrait set found for this minion.' }
   })
 
   on('prompt.submit', ($, e, next) => {
