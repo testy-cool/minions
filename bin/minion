@@ -23,6 +23,9 @@ EMOTE="$(dirname "$(dirname "$(readlink -f "$0")")")/vendor/pi-agent-portrait"
 # Claude-based minions run Claude Code with this mod: the animated portrait
 # and what the minion is doing, above the prompt.
 CLAUDE_MOD="$(dirname "$(dirname "$(readlink -f "$0")")")/claude-mods/minion-avatar"
+# Pi minions can also run on Kimchi (minion <name> --kimchi); these are the
+# fixes their extensions need there.
+KIMCHI_MODS="$(dirname "$(dirname "$(readlink -f "$0")")")/kimchi-mods"
 # A Claude minion's model and effort live here; the file also marks the
 # folder as a Claude minion, as .pi-home marks a Pi one.
 CLAUDE_CONF=.claude-minion.json
@@ -52,6 +55,8 @@ usage:
   minion <name> @N [...]       continue chat number N (works with -p)
   minion <name> -r             pick a chat to continue from a menu
   minion <name> [pi args...]   any other pi flags
+  minion <name> --kimchi [...] the same, on Kimchi instead of Pi (Pi
+                               minions only; put --kimchi first)
 new agents copy the "default" agent: edit it with the commands above
 agents live in $ROOT
 U
@@ -290,6 +295,40 @@ W
 
 # Rewrite sessions.md: one line per chat, newest first, with its start time,
 # how many messages the user sent, the first message and the transcript path.
+# Kimchi flags for a Pi minion, one per line: its model and thinking level,
+# and -e for each extension its Pi settings list. Kimchi reads only its own
+# settings, so these would otherwise be lost.
+kimchi_args() {
+  python3 - "$1" "$HERMES" "$KIMCHI_MODS" "$SUBAGENTS" <<'PY'
+import json, os, sys
+dir, hermes, mods, subagents = sys.argv[1:]
+s = json.load(open(os.path.join(dir, ".pi-home/settings.json")))
+for flag, key in (("--provider", "defaultProvider"), ("--model", "defaultModel"),
+                  ("--thinking", "defaultThinkingLevel")):
+    if s.get(key):
+        print(flag); print(s[key])
+for p in s.get("packages", []):
+    # Entries that only add skills, and git: packages, are not extensions.
+    if not isinstance(p, str) or p.startswith("git:"):
+        continue
+    if p.startswith("npm:"):
+        p = os.path.join(dir, ".pi-home/npm/node_modules", p[4:])
+    # Kimchi has its own helper agents, with the same tool names.
+    if os.path.realpath(p) == os.path.realpath(subagents):
+        continue
+    if os.path.realpath(p) == os.path.realpath(hermes):
+        # Under Kimchi it would read Kimchi's folder, not the minion's memory.
+        print("-e"); print(os.path.join(mods, "hermes-memory.ts"))
+        continue
+    try:
+        entries = json.load(open(os.path.join(p, "package.json")))["pi"]["extensions"]
+    except (OSError, KeyError, ValueError):
+        entries = []
+    for e in entries:
+        print("-e"); print(os.path.normpath(os.path.join(p, e)))
+PY
+}
+
 write_toc() {
   python3 - "$1" <<'TOC'
 import glob, json, os, sys
@@ -440,6 +479,7 @@ case "${1:-}" in
     dir=$(agent_dir "$name")
     cd "$dir"
     if [[ -f "$dir/$CLAUDE_CONF" ]]; then
+      if [[ "${1:-}" == --kimchi ]]; then echo "$name runs on Claude Code; only Pi minions run on Kimchi" >&2; exit 1; fi
       if [[ "${1:-}" == chats || "${1:-}" =~ ^@[0-9]+$ ]]; then
         echo "$name runs on Claude Code: pick a past chat with minion $name -r" >&2; exit 1
       fi
@@ -457,6 +497,8 @@ case "${1:-}" in
       [[ "$effort" != - ]] && args+=(--effort "$effort")
       exec claude "${args[@]}" "$@"
     fi
+    harness=pi
+    if [[ "${1:-}" == --kimchi ]]; then harness=kimchi; shift; fi
     # --no-context-files stops Pi from also loading CLAUDE.md/AGENTS.md
     # from parent folders such as ~, which would leak in other instructions.
     # --no-skills stops Pi from loading every skill in ~/.agents/skills;
@@ -464,6 +506,14 @@ case "${1:-}" in
     mkdir -p "$dir/memory/skills"
     args=(--no-context-files --append-system-prompt "$dir/AGENTS.md"
       --no-skills --skill "$dir/skills" --skill "$dir/memory/skills")
+    if [[ $harness == kimchi ]]; then
+      # Kimchi always reads AGENTS.md from this folder and the ones above
+      # it, so the prompt is not passed again. It ignores the minion's Pi
+      # settings, so its extensions, model and chat folder are passed here.
+      args=(--no-skills --skill "$dir/skills" --skill "$dir/memory/skills"
+        --session-dir "$dir/.pi-home/sessions/--$(sed 's|^/||; s|/|-|g' <<<"$dir")--")
+      while IFS= read -r a; do args+=("$a"); done < <(kimchi_args "$dir")
+    fi
     write_toc "$dir"
     # "chats" prints the numbered list; "@N" continues chat number N from it.
     # Every other run starts a new chat unless -c or -r is passed to Pi.
@@ -481,7 +531,8 @@ case "${1:-}" in
     env_name="minion-$(tr 'A-Z.' 'a-z-' <<<"$name")"
     PI_CODING_AGENT_DIR="$dir/.pi-home" MCPORTER_CONFIG="$dir/mcp.json" \
       LANGFUSE_TRACING_ENVIRONMENT="$env_name" PHOENIX_PROJECT="$env_name" \
-      pi "${args[@]}" "$@" || status=$?
+      MINION_HERMES="$HERMES" \
+      "$harness" "${args[@]}" "$@" || status=$?
     write_toc "$dir"
     exit $status
     ;;
