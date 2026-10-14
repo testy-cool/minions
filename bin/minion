@@ -445,6 +445,10 @@ case "${1:-}" in
       fi
       read -r model effort < <(python3 -c 'import json, sys; c = json.load(open(sys.argv[1])); print(c.get("model") or "-", c.get("effort") or "-")' "$dir/$CLAUDE_CONF")
       args=(--append-system-prompt-file "$dir/AGENTS.md" --plugin-dir "$CLAUDE_MOD")
+      # Claude Code files its memory under the git root, which here is the
+      # minions repo, so every Claude minion shared one memory folder.
+      # A memory folder given on the command line wins over that.
+      args+=(--settings "$(python3 -c 'import json, sys; print(json.dumps({"autoMemoryDirectory": sys.argv[1]}))' "$dir/memory")")
       [[ "$model" != - ]] && args+=(--model "$model")
       [[ "$effort" != - ]] && args+=(--effort "$effort")
       exec claude "${args[@]}" "$@"
