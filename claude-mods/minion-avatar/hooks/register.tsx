@@ -147,11 +147,11 @@ type Set = Partial<Record<State, string[][]>>
 
 const CYCLE_MS = 500
 const TALK_MS = 120
-// A state drawn as numbered frames plays them in order at 8 a second, as a
+// A state drawn as numbered frames plays them in order at 4 a second, as a
 // video would: loop_001.png, loop_002.png, ... wrap around to the start;
 // bounce_001.png, ... run forward then backward, so half the frames make a
 // loop with no jump.
-const LOOP_MS = 125
+const LOOP_MS = 250
 const SLEEP_AFTER_MS = 180000
 
 const FALLBACK: Partial<Record<State, State>> = {

@@ -128,7 +128,7 @@ test('a state drawn as numbered loop frames plays them in order, over and over',
   await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
   await clock.advance(2100)
   blits.length = 0
-  await clock.advance(1000)
+  await clock.advance(2000)
   const idle = blits.filter(f => f.includes('/idle/')).map(f => f.split('/').at(-1) ?? '')
   const order = ['loop_001.png', 'loop_002.png', 'loop_003.png']
   expect(idle.length).toBeGreaterThan(4)
@@ -145,7 +145,7 @@ test('bounce frames run forward then backward, with no repeat at the turns', asy
   await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
   await clock.advance(2100)
   blits.length = 0
-  await clock.advance(1100)
+  await clock.advance(2200)
   const seen = blits.filter(f => f.includes('/idle/')).map(f => f.split('/').at(-1) ?? '').join(' ')
   expect(seen).toContain('bounce_001.png bounce_002.png bounce_003.png bounce_002.png bounce_001.png bounce_002.png')
 })
