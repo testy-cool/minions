@@ -48,6 +48,20 @@ test('a minion whose config asks for more rows gets a bigger face', async ($, on
   expect(image.props.columns).toBe(12)
 })
 
+test('a minion whose config asks for a plain face shows its frames as drawn', async ($, on) => {
+  fakeSet(on, { avatarPlain: true })
+  mock.clock(on)
+  const runs: string[][] = []
+  on('process.run', ($: any, e: any) => { runs.push(e.argv ?? e); return { value: { exitCode: 0, stdout: '', stderr: '' } } as any })
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  const image = await ui.find({ type: 'Image' })
+  expect(JSON.stringify(image)).toContain(`${BASE}/emotes/pm/hi/hi1.png`)
+  expect(JSON.stringify(runs)).not.toContain('scanline')
+})
+
 test('a face is 4 rows by 8 columns when the config names no size', async ($, on) => {
   fakeSet(on)
   mock.clock(on)

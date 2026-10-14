@@ -181,9 +181,11 @@ async function loadSet($: EngineInterface): Promise<{ set: Set; size: Size } | n
   const base = `${root}/.pi/extensions/pi-emote`
   let name: string | undefined
   let size = faceSize()
+  let isPlain = false
   try {
     const config = JSON.parse(await $.fs.read(`${base}/config.json`))
     size = faceSize(config.avatarRows)
+    isPlain = config.avatarPlain === true
     const rules: { model?: string; 'emote-set'?: string }[] = config.emotes ?? []
     const model = (await $.session.model()).toLowerCase()
     const hit = rules.find(r => r.model && r.model !== '*' && model.includes(r.model.toLowerCase()))
@@ -212,6 +214,9 @@ async function loadSet($: EngineInterface): Promise<{ set: Set; size: Size } | n
   }
   if (!Object.keys(set).length) return null
 
+  // `avatarPlain` in a minion's config shows its frames as drawn, with no
+  // scanlines and no frame.
+  if (isPlain) return { set, size }
   return { set: await scanlined($, set, dir, `${base}/.scan-${size.px}/${name}`, size.px), size }
 }
 
