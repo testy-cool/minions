@@ -214,12 +214,12 @@ async function loadSet($: EngineInterface): Promise<Set | null> {
 }
 
 // Shrinks a frame to its drawn size, darkens every other pixel row and
-// draws a thin frame into the picture; a frame already made is kept.
+// draws a thin frame into the picture; a copy is remade when its frame is newer.
 // ImageMagick does the work.
 const SCANLINE_SCRIPT = `
 for src in "$@"; do
   dst="$CACHE/\${src#"$DIR"/}"
-  [ -s "$dst" ] && continue
+  [ -s "$dst" ] && [ ! "$src" -nt "$dst" ] && continue
   mkdir -p "$(dirname "$dst")"
   convert "$src" -resize "\$((PX - 8))x\$((PX - 8))" -channel RGB -fx 'j%2 ? u*0.82 : u' +channel \\
     -bordercolor '#141414' -border 2 -bordercolor '#6c6c6c' -border 2 "$dst" || exit 1
