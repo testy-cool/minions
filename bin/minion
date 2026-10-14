@@ -449,6 +449,10 @@ case "${1:-}" in
       # minions repo, so every Claude minion shared one memory folder.
       # A memory folder given on the command line wins over that.
       args+=(--settings "$(python3 -c 'import json, sys; print(json.dumps({"autoMemoryDirectory": sys.argv[1]}))' "$dir/memory")")
+      # For the same reason the minion's own .mcp.json is never approved and
+      # its servers stay off. Named on the command line, they load. The "="
+      # matters: --mcp-config takes several files and would eat the prompt.
+      [[ -f "$dir/.mcp.json" ]] && args+=("--mcp-config=$dir/.mcp.json")
       [[ "$model" != - ]] && args+=(--model "$model")
       [[ "$effort" != - ]] && args+=(--effort "$effort")
       exec claude "${args[@]}" "$@"
