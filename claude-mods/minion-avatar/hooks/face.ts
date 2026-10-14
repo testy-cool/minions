@@ -4,12 +4,24 @@ export const site = {
   file: null as string | null,
 }
 
-export const COLUMNS = 8
+// The portrait is ROWS cells high and twice as many columns wide, since a
+// cell is about twice as tall as it is wide. A minion can ask for a bigger
+// face with `avatarRows` in its own pi-emote config.json; every other
+// minion keeps ROWS.
 export const ROWS = 4
 
 // One cell is about 21 pixels tall in Vlad's terminal font (measured from a
-// screenshot), so frames are made at the size they are shown: square, ROWS
-// cells high, the frame drawn into the picture so its edges meet the cell
-// edges of the text beside it (a box border is drawn mid-cell and cannot).
-// Drawn at another size the terminal rescales them and the lines soften.
-export const FRAME_PX = ROWS * 21
+// screenshot), so frames are made at the size they are shown: square, as
+// many cells high as the face, the frame drawn into the picture so its edges
+// meet the cell edges of the text beside it (a box border is drawn mid-cell
+// and cannot). Drawn at another size the terminal rescales them and the
+// lines soften.
+const CELL_PX = 21
+
+/** How big one minion's portrait is drawn, in cells and in pixels. */
+export type Size = { rows: number; columns: number; px: number }
+
+export function faceSize(rows?: unknown): Size {
+  const r = typeof rows === 'number' && Number.isInteger(rows) && rows >= 2 && rows <= 12 ? rows : ROWS
+  return { rows: r, columns: r * 2, px: r * CELL_PX }
+}

@@ -5,11 +5,11 @@ const dir = (name: string) => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink:
 const png = (name: string) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })
 const props = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 80, title: '', isFocused: false } as any
 
-function fakeSet(on: any) {
+function fakeSet(on: any, config: object = {}) {
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => { const { Box } = $.ui.resolve(e); return <Box key="engine" /> })
   on('session.root', () => ({ value: '/x/teresa' }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
-  on('fs.read', () => ({ value: JSON.stringify({ emotes: [{ model: '*', 'emote-set': 'pm' }] }) }))
+  on('fs.read', () => ({ value: JSON.stringify({ emotes: [{ model: '*', 'emote-set': 'pm' }], ...config }) }))
   on('fs.exists', () => ({ value: true }))
   on('fs.list', ($: any, e: any) => {
     const path = typeof e === 'string' ? e : e.path
@@ -34,6 +34,30 @@ test('greets with the set\'s hi frame on session start', async ($, on) => {
   await clock.advance(2100)
   expect(blits).toContain(`${BASE}/emotes/pm/hi/hi2.png`)
   expect(blits.at(-1)).toBe(`${BASE}/emotes/pm/idle/idle.png`)
+})
+
+test('a minion whose config asks for more rows gets a bigger face', async ($, on) => {
+  fakeSet(on, { avatarRows: 6 })
+  mock.clock(on)
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  const image: any = await ui.find({ type: 'Image' })
+  expect(image.props.rows).toBe(6)
+  expect(image.props.columns).toBe(12)
+})
+
+test('a face is 4 rows by 8 columns when the config names no size', async ($, on) => {
+  fakeSet(on)
+  mock.clock(on)
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  const image: any = await ui.find({ type: 'Image' })
+  expect(image.props.rows).toBe(4)
+  expect(image.props.columns).toBe(8)
 })
 
 test('draws nothing of its own without a portrait set', async ($, on) => {

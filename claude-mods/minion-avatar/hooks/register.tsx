@@ -13,7 +13,7 @@ import type {
   StatusLimit,
 } from '../types'
 import { activityOf, partialArgsOf } from './activity-of'
-import { COLUMNS, FRAME_PX, ROWS, site } from './face'
+import { faceSize, site, type Size } from './face'
 import { gaugeRow, modelRow, repoRow } from './status'
 import type { Piece } from './status'
 import { clip, durationOf, oneLine, plural, printable, sizeOf, thoughtOf, wordsAdded } from './text'
@@ -176,12 +176,14 @@ const HOLD: Partial<Record<State, [number, State | 'back']>> = {
   failure: [1400, 'back'], interrupted: [1500, 'idle'], error: [2000, 'idle'],
 }
 
-async function loadSet($: EngineInterface): Promise<Set | null> {
+async function loadSet($: EngineInterface): Promise<{ set: Set; size: Size } | null> {
   const root = await $.session.root()
   const base = `${root}/.pi/extensions/pi-emote`
   let name: string | undefined
+  let size = faceSize()
   try {
     const config = JSON.parse(await $.fs.read(`${base}/config.json`))
+    size = faceSize(config.avatarRows)
     const rules: { model?: string; 'emote-set'?: string }[] = config.emotes ?? []
     const model = (await $.session.model()).toLowerCase()
     const hit = rules.find(r => r.model && r.model !== '*' && model.includes(r.model.toLowerCase()))
@@ -210,7 +212,7 @@ async function loadSet($: EngineInterface): Promise<Set | null> {
   }
   if (!Object.keys(set).length) return null
 
-  return scanlined($, set, dir, `${base}/.scan-${FRAME_PX}/${name}`)
+  return { set: await scanlined($, set, dir, `${base}/.scan-${size.px}/${name}`, size.px), size }
 }
 
 // Shrinks a frame to its drawn size, darkens every other pixel row and
@@ -227,11 +229,11 @@ done
 `
 
 /** The set with scanlined copies of its frames, or as given when they cannot be made. */
-async function scanlined($: EngineInterface, set: Set, dir: string, cache: string): Promise<Set> {
+async function scanlined($: EngineInterface, set: Set, dir: string, cache: string, px: number): Promise<Set> {
   const files = Object.values(set).flat(2)
   try {
     const run = await $.process.run(['sh', '-c', SCANLINE_SCRIPT, 'scanline', ...files], {
-      env: { CACHE: cache, DIR: dir, PX: String(FRAME_PX) },
+      env: { CACHE: cache, DIR: dir, PX: String(px) },
     })
     if (run.exitCode !== 0) return set
   } catch {
@@ -260,6 +262,7 @@ const pick = <T,>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)]!
 // stays in $.state.
 const face = {
   set: null as Set | null,
+  size: faceSize(),
   state: 'idle' as State,
   working: 'idle' as State,
   frames: [] as string[],
@@ -450,7 +453,9 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     stop()
-    face.set = await loadSet($)
+    const loaded = await loadSet($)
+    face.set = loaded?.set ?? null
+    face.size = loaded?.size ?? faceSize()
     face.state = 'idle'
     go($, 'hi')
 
@@ -881,7 +886,7 @@ export const register: Register = (on, options) => {
         <Box flexDirection="row">
           {site.band && file && Image ? (
             <Box flexShrink={0} marginRight={2}>
-              <Image key="face" source={{ file, format: 'png' }} columns={COLUMNS} rows={ROWS} alt=" " />
+              <Image key="face" source={{ file, format: 'png' }} columns={face.size.columns} rows={face.size.rows} alt=" " />
             </Box>
           ) : null}
           {box}
