@@ -5,7 +5,7 @@ const dir = (name: string) => ({ name, kind: 'dir', size: 0, mtimeMs: 0, isLink:
 const png = (name: string) => ({ name, kind: 'file', size: 1, mtimeMs: 0, isLink: false })
 const props = { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 80, title: '', isFocused: false } as any
 
-function fakeSet(on: any, config: object = {}) {
+function fakeSet(on: any, config: object = {}, idle = ['idle.png', 'idle_blink.png']) {
   on('ui.render', { component: 'AbovePrompt' }, ($: any, e: any) => { const { Box } = $.ui.resolve(e); return <Box key="engine" /> })
   on('command.register', () => ({ value: undefined }) as any)
   on('session.root', () => ({ value: '/x/teresa' }))
@@ -16,7 +16,7 @@ function fakeSet(on: any, config: object = {}) {
     const path = typeof e === 'string' ? e : e.path
     if (path === `${BASE}/emotes/pm`) return { value: [dir('hi'), dir('idle'), png('sheet.png')] }
     if (path.endsWith('/hi')) return { value: [png('hi1.png'), png('hi2.png')] }
-    if (path.endsWith('/idle')) return { value: [png('idle.png'), png('idle_blink.png')] }
+    if (path.endsWith('/idle')) return { value: idle.map(png) }
     return { value: [] }
   })
 }
@@ -116,6 +116,23 @@ test('/portrait picks up a changed config without a restart', async ($, on) => {
   expect(image.props.rows).toBe(6)
   expect(((await ui.find({ key: 'band' })) as any).props.marginTop).toBe(1)
   expect(image.props.source.file).toBe(`${BASE}/emotes/pm/hi/hi1.png`)
+})
+
+test('a state drawn as numbered loop frames plays them in order, over and over', async ($, on) => {
+  fakeSet(on, {}, ['loop_003.png', 'loop_001.png', 'loop_002.png'])
+  const clock = mock.clock(on)
+  const blits: string[] = []
+  on('ui.blit', ($: any, e: any) => { blits.push(e.source.file); return { value: {} } })
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  await clock.advance(2100)
+  blits.length = 0
+  await clock.advance(500)
+  const idle = blits.filter(f => f.includes('/idle/')).map(f => f.split('/').at(-1) ?? '')
+  const order = ['loop_001.png', 'loop_002.png', 'loop_003.png']
+  expect(idle.length).toBeGreaterThan(4)
+  idle.slice(1).forEach((f, i) => expect(order.indexOf(f)).toBe((order.indexOf(idle[i]!) + 1) % 3))
 })
 
 test('draws nothing of its own without a portrait set', async ($, on) => {
