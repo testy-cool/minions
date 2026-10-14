@@ -128,11 +128,26 @@ test('a state drawn as numbered loop frames plays them in order, over and over',
   await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
   await clock.advance(2100)
   blits.length = 0
-  await clock.advance(500)
+  await clock.advance(1000)
   const idle = blits.filter(f => f.includes('/idle/')).map(f => f.split('/').at(-1) ?? '')
   const order = ['loop_001.png', 'loop_002.png', 'loop_003.png']
   expect(idle.length).toBeGreaterThan(4)
   idle.slice(1).forEach((f, i) => expect(order.indexOf(f)).toBe((order.indexOf(idle[i]!) + 1) % 3))
+})
+
+test('bounce frames run forward then backward, with no repeat at the turns', async ($, on) => {
+  fakeSet(on, {}, ['bounce_001.png', 'bounce_002.png', 'bounce_003.png'])
+  const clock = mock.clock(on)
+  const blits: string[] = []
+  on('ui.blit', ($: any, e: any) => { blits.push(e.source.file); return { value: {} } })
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  await clock.advance(2100)
+  blits.length = 0
+  await clock.advance(1100)
+  const seen = blits.filter(f => f.includes('/idle/')).map(f => f.split('/').at(-1) ?? '').join(' ')
+  expect(seen).toContain('bounce_001.png bounce_002.png bounce_003.png bounce_002.png bounce_001.png bounce_002.png')
 })
 
 test('draws nothing of its own without a portrait set', async ($, on) => {

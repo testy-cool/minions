@@ -147,9 +147,11 @@ type Set = Partial<Record<State, string[][]>>
 
 const CYCLE_MS = 500
 const TALK_MS = 120
-// A state drawn as numbered loop frames (loop_001.png, loop_002.png, ...)
-// plays them in order at 12 a second, as a video would.
-const LOOP_MS = 83
+// A state drawn as numbered frames plays them in order at 8 a second, as a
+// video would: loop_001.png, loop_002.png, ... wrap around to the start;
+// bounce_001.png, ... run forward then backward, so half the frames make a
+// loop with no jump.
+const LOOP_MS = 125
 const SLEEP_AFTER_MS = 180000
 
 const FALLBACK: Partial<Record<State, State>> = {
@@ -316,11 +318,14 @@ function go($: EngineInterface, next: State) {
   face.step = 0
   if (!frames.length) return
 
-  if (frames.length > 1 && frames.every(f => /\/loop_\d+\.png$/.test(f))) {
-    void show($, frames[0])
+  const isLoop = frames.every(f => /\/loop_\d+\.png$/.test(f))
+  const isBounce = frames.every(f => /\/bounce_\d+\.png$/.test(f))
+  if (frames.length > 1 && (isLoop || isBounce)) {
+    const order = isBounce ? [...frames, ...frames.slice(1, -1).reverse()] : frames
+    void show($, order[0])
     face.ticker = $.clock.every(LOOP_MS, () => {
-      face.step = (face.step + 1) % frames.length
-      void show($, frames[face.step])
+      face.step = (face.step + 1) % order.length
+      void show($, order[face.step])
     })
     if (next === 'idle' && SLEEP_AFTER_MS > 0) {
       face.sleeper = $.clock.after(SLEEP_AFTER_MS, () => go($, 'sleep'))
