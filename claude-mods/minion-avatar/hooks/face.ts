@@ -27,7 +27,7 @@ export function faceSize(rows?: unknown): Size {
 }
 
 /**
- * How many rows of space sit above one minion's portrait, from `avatarMarginTop`
+ * How many empty rows sit above one minion's band, face and text alike, from `avatarMarginTop`
  * in its pi-emote config.json: a whole number from 0 to 4, else none.
  */
 export function marginTopOf(rows?: unknown): number {

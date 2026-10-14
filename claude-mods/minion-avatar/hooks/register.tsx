@@ -891,9 +891,9 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        <Box flexDirection="row">
+        <Box key="band" flexDirection="row" marginTop={face.marginTop}>
           {site.band && file && Image ? (
-            <Box key="portrait" flexShrink={0} marginRight={2} marginTop={face.marginTop}>
+            <Box key="portrait" flexShrink={0} marginRight={2}>
               <Image key="face" source={{ file, format: 'png' }} columns={face.size.columns} rows={face.size.rows} alt=" " />
             </Box>
           ) : null}
