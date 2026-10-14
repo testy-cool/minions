@@ -7,7 +7,7 @@
     "statusRows": {
       "type": "boolean",
       "title": "Status rows",
-      "description": "Show model, context, rate limits and the repo beside the portrait, with a bold headline. For sessions with the status line turned off.",
+      "description": "Show model, context, rate limits and the repo beside the portrait. For sessions with the status line turned off.",
       "default": false
     }
   }

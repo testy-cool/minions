@@ -8,7 +8,6 @@ import type {
   ActivityEntry,
   ActivityNow,
   ActivityOutcome,
-  ActivityPhase,
   StatusInfo,
   StatusLimit,
 } from '../types'
@@ -59,19 +58,6 @@ const isExpanded = atom(
 const status = atom({ plugin: 'minion-avatar', key: 'status' } as const, null as StatusInfo | null)
 
 const limitStart = atom({ plugin: 'minion-avatar', key: 'limitStart' } as const, {} as Record<string, number>)
-
-const PHASE_COLORS: Record<ActivityPhase, string> = {
-  idle: 'gray',
-  requesting: 'cyan',
-  thinking: 'magenta',
-  writing: 'green',
-  composing: 'blue',
-  tool: 'cyan',
-  agent: 'cyan',
-  approval: 'yellow',
-  question: 'yellow',
-  compacting: 'blue',
-}
 
 const OUTCOME_MARKS: Record<ActivityOutcome, { mark: string; color: string }> = {
   ok: { mark: '✓', color: 'green' },
@@ -131,7 +117,6 @@ type Live = {
   isReplyInWord: boolean
   composing: { tool: string; head: string; chars: number } | null
   lastAction: string | null
-  lastTurn: string | null
   lastPublishMs: number
   trailing: Timer | null
   isSweeping: boolean
@@ -458,7 +443,6 @@ export const register: Register = (on, options) => {
     isReplyInWord: false,
     composing: null,
     lastAction: null,
-    lastTurn: null,
     lastPublishMs: 0,
     trailing: null,
     isSweeping: false,
@@ -731,7 +715,6 @@ export const register: Register = (on, options) => {
     await enter($, live, 'idle')
     await remember($, { kind: 'end', label: capitalized(label), durationMs, outcome })
 
-    live.lastTurn = label
     live.turnStartMs = null
     live.calls.clear()
 
@@ -761,8 +744,17 @@ export const register: Register = (on, options) => {
     const nowMs = await $.clock.now()
 
     const isWorking = headline.phase !== 'idle'
-    const color = PHASE_COLORS[headline.phase]
-    const elapsed = isWorking ? ` · ${durationOf(nowMs - headline.sinceMs)}` : ''
+
+    // On a narrow screen only the label gives way: the rest would wrap.
+    const runningStep = (indent: string) => [
+      <Box key="dot" flexShrink={0}>
+        <Text color="blue">{`${indent}● `}</Text>
+      </Box>,
+      <Text key="label" wrap="truncate-end">{printable(headline.label, MAX_LABEL_CHARS)}</Text>,
+      <Box key="elapsed" flexShrink={0}>
+        <Text dimColor>{`  ${durationOf(nowMs - headline.sinceMs)}`}</Text>
+      </Box>,
+    ]
 
     // One agent the headline names; more, or one beside the main loop's
     // work, get a row each.
@@ -773,7 +765,7 @@ export const register: Register = (on, options) => {
     const agentRows = listed.map((agent, i) => (
       <Box key={`agent-${i}`} flexDirection="row">
         <Box flexShrink={0}>
-          <Text color={PHASE_COLORS.agent}>{'◆ '}</Text>
+          <Text color="cyan">{'◆ '}</Text>
         </Box>
         <Text bold wrap="truncate-end">{printable(agent.name, MAX_AGENT_NAME_CHARS)}</Text>
         <Text wrap="truncate-end">{` › ${printable(agent.label, MAX_LABEL_CHARS)}`}</Text>
@@ -795,21 +787,20 @@ export const register: Register = (on, options) => {
       : []
 
     const teamRows = listed.length + moreAgents.length
-    const { turn, steps } = latestTurn(entries)
-    const stepRows = Math.min(MAX_STEP_ROWS, Math.max(2, e.props.maxRows - 4 - teamRows))
-    const hidden = steps.length > stepRows ? steps.length - (stepRows - 1) : 0
-    const shown = steps.slice(hidden)
+    const { turn, end, steps } = latestTurn(entries)
+    const turnTook = end ? end.durationMs : live.turnStartMs === null ? null : nowMs - live.turnStartMs
+    const stepRows = Math.min(MAX_STEP_ROWS, Math.max(2, e.props.maxRows - 3 - teamRows))
 
-    const rowOf = (entry: ActivityEntry, key: string, indent: string) => {
+    const finished = steps.map((entry, i) => {
       const { mark, color: markColor } = KIND_MARKS[entry.kind] ?? OUTCOME_MARKS[entry.outcome]
       const took = entry.durationMs === null || entry.kind === 'end' || entry.kind === 'reply' ? '' : `  ${durationOf(entry.durationMs)}`
 
       return (
-        <Box key={key} flexDirection="row">
+        <Box key={`row-${i}`} flexDirection="row">
           <Box flexShrink={0}>
-            <Text color={markColor}>{`${indent}${mark} `}</Text>
+            <Text color={markColor}>{`  ${mark} `}</Text>
           </Box>
-          <Text bold={entry.kind === 'turn'} dimColor={entry.kind === 'end'} wrap="truncate-end">
+          <Text dimColor={entry.kind === 'end'} wrap="truncate-end">
             {printable(entry.label, MAX_LABEL_CHARS)}
           </Text>
           <Box flexShrink={0}>
@@ -817,20 +808,20 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
       )
-    }
+    })
 
-    const turnRow = turn ? [rowOf(turn, 'turn', '')] : []
-    const stepList = shown.map((entry, i) => rowOf(entry, `row-${i}`, '  '))
+    // The step running now is the last row; the clock on it is its own.
+    const running = isWorking ? <Box key="running" flexDirection="row">{runningStep('  ')}</Box> : null
+
+    const stepList = running ? [...finished, running] : finished
+    const hidden = stepList.length > stepRows ? stepList.length - (stepRows - 1) : 0
     const earlier = hidden > 0 ? [<Text key="earlier" dimColor>{`  … ${hidden} earlier in this turn`}</Text>] : []
-    const empty = entries.length === 0 ? [<Text key="empty" dimColor>No actions yet</Text>] : []
 
     const body = isOpen
       ? [
-          <Box key="history" flexDirection="column" marginTop={1}>
-            {turnRow}
+          <Box key="history" flexDirection="column">
             {earlier}
-            {stepList}
-            {empty}
+            {stepList.slice(hidden)}
           </Box>,
         ]
       : []
@@ -858,49 +849,39 @@ export const register: Register = (on, options) => {
     // Only the terminal draws pictures.
     const Image = e.surface === 'terminal' ? $.ui.resolve(e).Image : undefined
 
+    const gap = (
+      <Box key="gap" flexShrink={0}>
+        <Text>{' '}</Text>
+      </Box>
+    )
+    const lead = isOpen
+      ? turn
+        ? [
+            gap,
+            <Text key="turn" bold color="green" wrap="truncate-end">{`› ${printable(turn.label, MAX_LABEL_CHARS)}`}</Text>,
+            <Box key="turn-took" flexShrink={0}>
+              <Text dimColor>{turnTook === null ? '' : `  ${durationOf(turnTook)}`}</Text>
+            </Box>,
+          ]
+        : [<Text key="none" dimColor>{entries.length === 0 ? ' No actions yet' : ''}</Text>]
+      : isWorking
+        ? [gap, ...runningStep('')]
+        : []
+
     const box = (
       <Box flexDirection="column" flexGrow={1} justifyContent={isOpen ? 'flex-start' : showStatus ? 'flex-end' : 'center'}>
-        {showStatus ? (
-          <Box key="activity" flexDirection="row">
-            {/* The headline: bright, its color the state. On a narrow screen only
-                the label gives way: the rest would wrap. */}
-            <Text bold color={isWorking ? color : 'white'} wrap="truncate-end">
-              {printable(headline.label, MAX_LABEL_CHARS)}
-            </Text>
-            <Box flexShrink={0}>
-              <Text dimColor>{elapsed}</Text>
-            </Box>
-            <Box flexShrink={0} marginLeft={2}>
-              <Button
-                key="toggle"
-                plain
-                dimColor
-                label={isOpen ? 'history ▾' : 'history ▸'}
-                onPress={() => update($, isExpanded, open => !open)}
-              />
-            </Box>
-          </Box>
-        ) : (
-          <Box key="activity" flexDirection="row">
-            <Button
-              key="toggle"
-              plain
-              label={isOpen ? '▾' : '▸'}
-              onPress={() => update($, isExpanded, open => !open)}
-            />
-            {/* On a narrow screen only the label gives way: the rest would wrap. */}
-            <Box flexShrink={0}>
-              <Text color={color}>{isWorking ? ' ● ' : ' ○ '}</Text>
-            </Box>
-            <Text wrap="truncate-end">{printable(headline.label, MAX_LABEL_CHARS)}</Text>
-            <Box flexShrink={0}>
-              <Text dimColor>{elapsed}</Text>
-            </Box>
-          </Box>
-        )}
+        <Box key="activity" flexDirection="row">
+          <Button
+            key="toggle"
+            plain
+            label={isOpen ? '▾' : '▸'}
+            onPress={() => update($, isExpanded, open => !open)}
+          />
+          {lead}
+        </Box>
+        {body}
         {statusRows}
         {teamBox}
-        {body}
       </Box>
     )
 
@@ -1017,9 +998,7 @@ function current(live: Live): ActivityNow {
       return { phase: 'composing', label: `${activityOf(composing.tool, args)}${size}`, sinceMs }
     }
     case 'idle':
-      return live.lastTurn === null
-        ? IDLE
-        : { ...IDLE, label: `Idle · last turn ${live.lastTurn}` }
+      return IDLE
   }
 }
 

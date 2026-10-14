@@ -121,8 +121,7 @@ describe('register', () => {
     const ui = await $.ui.mount(BAND)
     const text = (await ui.find({ key: 'activity' }))?.text ?? ''
 
-    expect(text).toContain('Idle')
-    expect(text).toContain('▸')
+    expect(text.trim()).toBe('▸')
   })
 
   test('another plugin drawing the band keeps its box, under this one', async ($, on) => {
@@ -140,7 +139,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount(BAND)
 
-    expect((await ui.find({ key: 'activity' }))?.text ?? '').toContain('Idle')
+    expect((await ui.find({ key: 'activity' }))?.text ?? '').toContain('▸')
     expect((await ui.find({ key: 'beneath' }))?.text ?? '').toContain('2 tasks for you')
   })
 
@@ -178,7 +177,7 @@ describe('register', () => {
 
     await $.turn.complete({ ...DONE, turnId })
 
-    expect(await box.read()).toContain('Idle · last turn done in')
+    expect((await box.read()).trim()).toBe('▸')
   })
 
   test('the triangle opens the history of the turn', async ($, on) => {
@@ -202,10 +201,9 @@ describe('register', () => {
 
     const history = (await ui.find({ key: 'history' }))?.text ?? ''
 
-    expect(history).toContain('fix the config')
     expect(history).toContain('⊘ Reading app.ts')
     expect(history).toContain('Wrote the reply (1 word)')
-    expect((await ui.find({ key: 'activity' }))?.text).toContain('▾')
+    expect((await ui.find({ key: 'activity' }))?.text).toMatch(/▾\s+› fix the config/)
   })
 
   test('the history keeps only the latest turn, without thought or done rows', async ($, on) => {
@@ -226,14 +224,58 @@ describe('register', () => {
     await ui.press({ key: 'toggle' })
 
     const history = (await ui.find({ key: 'history' }))?.text ?? ''
+    const message = (await ui.find({ key: 'activity' }))?.text ?? ''
 
-    expect(history).toContain('second question')
+    expect(message).toContain('› second question')
+    expect(message).not.toContain('first question')
     expect(history).toContain('✓ Reading new.ts')
     expect(history).not.toContain('first question')
     expect(history).not.toContain('old.ts')
     expect(history).not.toContain('earlier')
     expect(history).not.toContain('Thought')
     expect(history).not.toContain('Done in')
+  })
+
+  test('the step running now is the last row, and its clock is its own', async ($, on) => {
+    const { box, clock } = seat(on, [])
+    const ui = await mount($, box)
+    const seen = { open: { row: '', steps: '' }, closed: '' }
+
+    box.toolAnswer = { result: 'ok' } as never
+    box.onTool = async () => {
+      await clock.advance(2000)
+      seen.closed = (await ui.find({ key: 'activity' }))?.text ?? ''
+      await ui.press({ key: 'toggle' })
+      seen.open.row = (await ui.find({ key: 'activity' }))?.text ?? ''
+      seen.open.steps = (await ui.find({ key: 'history' }))?.text ?? ''
+      await ui.press({ key: 'toggle' })
+    }
+
+    await $.turn.start({ text: 'fix it', turnId: 't1' })
+    await $.tool.call({ tool: 'Read', file_path: 'a.ts' })
+    await clock.advance(5000)
+    await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List the files' })
+
+    // Closed: one line, the running step.
+    expect(seen.closed).toMatch(/^▸\s+● List the files\s+2\.0s$/)
+    // Open: the message row holds the whole turn's clock (2s + 5s + 2s).
+    expect(seen.open.row).toMatch(/^▾\s+› fix it\s+9\.0s$/)
+    // The finished step comes first and the running one is last.
+    expect(seen.open.steps).toMatch(/✓ Reading a\.ts.*● List the files\s+2\.0s$/)
+  })
+
+  test('a finished turn shows its final time on the message row, and nothing running', async ($, on) => {
+    const { box, clock } = seat(on, [])
+    const ui = await mount($, box)
+
+    await $.turn.start({ text: 'quick one', turnId: 't1' })
+    await clock.advance(4200)
+    await $.turn.complete({ ...DONE, turnId: 't1' })
+    await clock.advance(9000)
+    await ui.press({ key: 'toggle' })
+
+    expect((await ui.find({ key: 'activity' }))?.text).toMatch(/^▾\s+› quick one\s+4\.2s$/)
+    expect((await ui.find({ key: 'history' }))?.text ?? '').not.toContain('●')
   })
 
   test('a turn that was interrupted keeps the row that says so', async ($, on) => {
@@ -373,7 +415,6 @@ describe('register', () => {
 
     const history = (await ui.find({ key: 'history' }))?.text ?? ''
 
-    expect(await box.read()).toContain('Idle')
     expect(history).toContain('✓ Agent: Storyboard the video')
     expect(history).toContain('✗ Agent: Draft the plan')
   })
