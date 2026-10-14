@@ -16,6 +16,7 @@ import { activityOf, partialArgsOf } from './activity-of'
 import { faceSize, site, type Size } from './face'
 import { gaugeRow, modelRow, repoRow } from './status'
 import type { Piece } from './status'
+import { latestTurn } from './turn'
 import { clip, durationOf, oneLine, plural, printable, sizeOf, thoughtOf, wordsAdded } from './text'
 
 const IDLE: ActivityNow = {
@@ -25,7 +26,7 @@ const IDLE: ActivityNow = {
 }
 
 const MAX_HISTORY = 100
-const MAX_HISTORY_ROWS = 12
+const MAX_STEP_ROWS = 8
 const MAX_THOUGHT_CHARS = 70
 const MAX_THOUGHT_BUFFER = 2000
 const MAX_INPUT_HEAD = 4000
@@ -81,7 +82,6 @@ const OUTCOME_MARKS: Record<ActivityOutcome, { mark: string; color: string }> = 
 
 const KIND_MARKS: Partial<Record<ActivityEntry['kind'], { mark: string; color: string }>> = {
   turn: { mark: '›', color: 'white' },
-  thought: { mark: '∴', color: 'magenta' },
   reply: { mark: '✎', color: 'green' },
   compact: { mark: '⇣', color: 'blue' },
 }
@@ -127,8 +127,6 @@ type Live = {
   isFirstRequest: boolean
   resultsToReview: number
   thought: string
-  thoughtWords: number
-  isThoughtInWord: boolean
   replyWords: number
   isReplyInWord: boolean
   composing: { tool: string; head: string; chars: number } | null
@@ -456,8 +454,6 @@ export const register: Register = (on, options) => {
     isFirstRequest: false,
     resultsToReview: 0,
     thought: '',
-    thoughtWords: 0,
-    isThoughtInWord: false,
     replyWords: 0,
     isReplyInWord: false,
     composing: null,
@@ -799,21 +795,21 @@ export const register: Register = (on, options) => {
       : []
 
     const teamRows = listed.length + moreAgents.length
-    const rows = Math.min(MAX_HISTORY_ROWS, Math.max(1, e.props.maxRows - 4 - teamRows))
-    const shown = entries.slice(-rows)
-    const hidden = entries.length - shown.length
+    const { turn, steps } = latestTurn(entries)
+    const stepRows = Math.min(MAX_STEP_ROWS, Math.max(2, e.props.maxRows - 4 - teamRows))
+    const hidden = steps.length > stepRows ? steps.length - (stepRows - 1) : 0
+    const shown = steps.slice(hidden)
 
-    const historyRows = shown.map((entry, i) => {
+    const rowOf = (entry: ActivityEntry, key: string, indent: string) => {
       const { mark, color: markColor } = KIND_MARKS[entry.kind] ?? OUTCOME_MARKS[entry.outcome]
-      const isQuiet = entry.kind === 'thought' || entry.kind === 'end'
-      const took = entry.durationMs === null ? '' : `  ${durationOf(entry.durationMs)}`
+      const took = entry.durationMs === null || entry.kind === 'end' || entry.kind === 'reply' ? '' : `  ${durationOf(entry.durationMs)}`
 
       return (
-        <Box key={`row-${i}`} flexDirection="row">
+        <Box key={key} flexDirection="row">
           <Box flexShrink={0}>
-            <Text color={markColor}>{`${mark} `}</Text>
+            <Text color={markColor}>{`${indent}${mark} `}</Text>
           </Box>
-          <Text bold={entry.kind === 'turn'} dimColor={isQuiet} wrap="truncate-end">
+          <Text bold={entry.kind === 'turn'} dimColor={entry.kind === 'end'} wrap="truncate-end">
             {printable(entry.label, MAX_LABEL_CHARS)}
           </Text>
           <Box flexShrink={0}>
@@ -821,16 +817,19 @@ export const register: Register = (on, options) => {
           </Box>
         </Box>
       )
-    })
+    }
 
-    const earlier = hidden > 0 ? [<Text dimColor>{`… ${hidden} earlier`}</Text>] : []
-    const empty = entries.length === 0 ? [<Text dimColor>No actions yet</Text>] : []
+    const turnRow = turn ? [rowOf(turn, 'turn', '')] : []
+    const stepList = shown.map((entry, i) => rowOf(entry, `row-${i}`, '  '))
+    const earlier = hidden > 0 ? [<Text key="earlier" dimColor>{`  … ${hidden} earlier in this turn`}</Text>] : []
+    const empty = entries.length === 0 ? [<Text key="empty" dimColor>No actions yet</Text>] : []
 
     const body = isOpen
       ? [
           <Box key="history" flexDirection="column" marginTop={1}>
+            {turnRow}
             {earlier}
-            {historyRows}
+            {stepList}
             {empty}
           </Box>,
         ]
@@ -1190,32 +1189,18 @@ async function enter($: EngineInterface, live: Live, next: ModelPhase): Promise<
   }
 
   const nowMs = await $.clock.now()
-  const durationMs = nowMs - live.phaseStartMs
-
-  if (live.phase === 'thinking') {
-    const words = live.thoughtWords
-
-    await remember($, {
-      kind: 'thought',
-      label: words > 0 ? `Thought (${plural(words, 'word')})` : 'Thought',
-      durationMs,
-      outcome: 'ok',
-    })
-  }
 
   if (live.phase === 'writing' && live.replyWords > 0) {
     await remember($, {
       kind: 'reply',
       label: `Wrote the reply (${plural(live.replyWords, 'word')})`,
-      durationMs,
+      durationMs: null,
       outcome: 'ok',
     })
   }
 
   if (next === 'thinking') {
     live.thought = ''
-    live.thoughtWords = 0
-    live.isThoughtInWord = false
   }
 
   if (next === 'writing') {
@@ -1235,11 +1220,7 @@ async function follow($: EngineInterface, live: Live, chunk: TurnStepChunk): Pro
 
       await enter($, live, 'thinking')
       live.resultsToReview = 0
-      const { added, isInWord } = wordsAdded(chunk.text, live.isThoughtInWord)
-
       live.thought = (live.thought + chunk.text).slice(-MAX_THOUGHT_BUFFER)
-      live.thoughtWords += added
-      live.isThoughtInWord = isInWord
       await publish($, live, isNew)
 
       return

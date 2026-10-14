@@ -203,11 +203,72 @@ describe('register', () => {
     const history = (await ui.find({ key: 'history' }))?.text ?? ''
 
     expect(history).toContain('fix the config')
-    expect(history).toContain('Thought (4 words)')
     expect(history).toContain('⊘ Reading app.ts')
     expect(history).toContain('Wrote the reply (1 word)')
-    expect(history).toContain('Done in')
     expect((await ui.find({ key: 'activity' }))?.text).toContain('▾')
+  })
+
+  test('the history keeps only the latest turn, without thought or done rows', async ($, on) => {
+    const { box } = seat(on, [[{ kind: 'thinking', index: 0, text: 'Think it over.' }]])
+    const ui = await mount($, box)
+
+    box.toolAnswer = { result: 'ok' } as never
+
+    await $.turn.start({ text: 'first question', turnId: 't1' })
+    await step($, 0)
+    await $.tool.call({ tool: 'Read', file_path: 'old.ts' })
+    await $.turn.complete({ ...DONE, turnId: 't1' })
+
+    await $.turn.start({ text: 'second question', turnId: 't2' })
+    await step($, 0)
+    await $.tool.call({ tool: 'Read', file_path: 'new.ts' })
+    await $.turn.complete({ ...DONE, turnId: 't2' })
+    await ui.press({ key: 'toggle' })
+
+    const history = (await ui.find({ key: 'history' }))?.text ?? ''
+
+    expect(history).toContain('second question')
+    expect(history).toContain('✓ Reading new.ts')
+    expect(history).not.toContain('first question')
+    expect(history).not.toContain('old.ts')
+    expect(history).not.toContain('earlier')
+    expect(history).not.toContain('Thought')
+    expect(history).not.toContain('Done in')
+  })
+
+  test('a turn that was interrupted keeps the row that says so', async ($, on) => {
+    const { box } = seat(on, [])
+    const ui = await mount($, box)
+
+    await $.turn.start({ text: 'long job', turnId: 't1' })
+    await $.turn.complete({ ...DONE, turnId: 't1', reason: 'aborted', isAborted: true })
+    await ui.press({ key: 'toggle' })
+
+    expect((await ui.find({ key: 'history' }))?.text ?? '').toContain('■ Interrupted after')
+  })
+
+  test('a long turn keeps its newest steps under one row counting the rest', async ($, on) => {
+    const { box } = seat(on, [])
+    const ui = await mount($, box)
+
+    box.toolAnswer = { result: 'ok' } as never
+
+    await $.turn.start({ text: 'read everything', turnId: 't1' })
+
+    for (let i = 0; i < 10; i += 1) {
+      await $.tool.call({ tool: 'Read', file_path: `f${i}.ts` })
+    }
+
+    await $.turn.complete({ ...DONE, turnId: 't1' })
+    await ui.press({ key: 'toggle' })
+
+    const history = (await ui.find({ key: 'history' }))?.text ?? ''
+
+    expect(history).toContain('… 3 earlier in this turn')
+    expect(history).not.toContain('f2.ts')
+    expect(history).toContain('f3.ts')
+    expect(history).toContain('f9.ts')
+    expect(history.match(/✓/g)).toHaveLength(7)
   })
 
   test('thinking with no thought text keeps the last action', async ($, on) => {
