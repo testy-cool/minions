@@ -17,7 +17,13 @@ export function activityOf(tool: string, args: Record<string, unknown>): string 
     return typeof value === 'string' ? clip(oneLine(value), MAX_DETAIL_CHARS) : ''
   }
 
-  const file = (key: string): string => baseName(arg(key))
+  // The name is taken from the whole path, then cut; cutting the path first
+  // left a long path's name as a scrap such as "i…".
+  const file = (key: string): string => {
+    const value = args[key]
+
+    return typeof value === 'string' ? clip(baseName(oneLine(value)), MAX_DETAIL_CHARS) : ''
+  }
 
   switch (tool) {
     case 'Bash':

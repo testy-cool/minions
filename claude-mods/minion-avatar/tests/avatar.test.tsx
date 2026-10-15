@@ -180,3 +180,15 @@ test('the history beside the face lists finished steps in plain words', async ($
   expect(await ui.find({ text: 'Show working tree status' })).toBeDefined()
   expect(await ui.find({ text: /git status/ })).toBeUndefined()
 })
+
+test('a file deep in a long path is named in full', async ($, on) => {
+  fakeSet(on)
+  mock.clock(on)
+  on('ui.blit', () => ({ value: {} }))
+  on('session.start', () => ({ cwd: '/x' }) as any)
+  on('tool.call', () => ({ result: 'ok', text: 'ok' }) as any)
+  await $.session.start({ cwd: '/x' } as any)
+  await $.tool.call({ tool: 'Write', file_path: `/x/${'deep/'.repeat(20)}capture-fix.md` } as any)
+  const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
+  expect(await ui.find({ text: 'Writing capture-fix.md' })).toBeDefined()
+})
