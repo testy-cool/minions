@@ -50,9 +50,10 @@ const team = atom(
   [] as readonly ActivityAgent[],
 )
 
+// Open by default, so every minion shows its steps beside the face.
 const isExpanded = atom(
   { plugin: 'minion-avatar', key: 'isExpanded' } as const,
-  false,
+  true,
 )
 
 const status = atom({ plugin: 'minion-avatar', key: 'status' } as const, null as StatusInfo | null)

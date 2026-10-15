@@ -103,6 +103,8 @@ async function mount($: Engine, box: { read: () => Promise<string> }) {
   const ui = await $.ui.mount(BAND)
 
   box.read = async () => (await ui.find({ key: 'activity' }))?.text ?? ''
+  // The history starts open; these tests start from the one-line view.
+  await ui.press({ key: 'toggle' })
 
   return ui
 }
@@ -114,14 +116,14 @@ async function step($: Engine, index: number) {
 }
 
 describe('register', () => {
-  test('the box says idle before any turn, its triangle closed', async ($, on) => {
+  test('the box says idle before any turn, its history open', async ($, on) => {
     mock.clock(on)
     seatBand(on)
 
     const ui = await $.ui.mount(BAND)
     const text = (await ui.find({ key: 'activity' }))?.text ?? ''
 
-    expect(text.trim()).toBe('▸')
+    expect(text.trim()).toBe('▾ No actions yet')
   })
 
   test('another plugin drawing the band keeps its box, under this one', async ($, on) => {
@@ -139,7 +141,7 @@ describe('register', () => {
 
     const ui = await $.ui.mount(BAND)
 
-    expect((await ui.find({ key: 'activity' }))?.text ?? '').toContain('▸')
+    expect((await ui.find({ key: 'activity' }))?.text ?? '').toContain('▾')
     expect((await ui.find({ key: 'beneath' }))?.text ?? '').toContain('2 tasks for you')
   })
 

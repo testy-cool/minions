@@ -176,7 +176,6 @@ test('the history beside the face lists finished steps in plain words', async ($
   await $.tool.call({ tool: 'Bash', command: 'git status --short', description: 'Show working tree status' } as any)
   const ui = await $.ui.mount({ plugin: 'minion-avatar', surface: 'terminal', component: 'AbovePrompt', props })
   expect(await ui.find({ type: 'Image' })).toBeDefined()
-  await ui.press({ key: 'toggle' })
   expect(await ui.find({ text: 'Reading notes.md' })).toBeDefined()
   expect(await ui.find({ text: 'Show working tree status' })).toBeDefined()
   expect(await ui.find({ text: /git status/ })).toBeUndefined()
