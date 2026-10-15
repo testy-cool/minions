@@ -57,6 +57,9 @@ usage:
   minion <name> [pi args...]   any other pi flags
   minion <name> --kimchi [...] the same, on Kimchi instead of Pi (Pi
                                minions only; put --kimchi first)
+  minion <name> --claude [...] a Pi minion on Claude Code for one chat, with
+                               its prompt, skills, MCP servers and memory;
+                               put --claude first
 new agents copy the "default" agent: edit it with the commands above
 agents live in $ROOT
 U
@@ -329,6 +332,74 @@ for p in s.get("packages", []):
 PY
 }
 
+# Run a Pi minion on Claude Code for one launch (minion <name> --claude).
+# Nothing in the minion's folder changes: what Claude Code needs is made in
+# a cache folder each time. Its memory stays Pi's, read into the prompt and
+# written through minion-memory, so the next Pi run knows what it learned.
+run_pi_on_claude() {
+  local name=$1 dir=$2; shift 2
+  local cache="${XDG_CACHE_HOME:-$HOME/.cache}/minions/claude/$name"
+  local memtool; memtool="$(dirname "$(readlink -f "$0")")/minion-memory"
+  rm -rf "$cache"; mkdir -p "$cache/skills/.claude-plugin" "$cache/skills/skills"
+  # Its skills, as a Claude Code mod of their own. Links keep them current.
+  echo '{"name": "minion"}' > "$cache/skills/.claude-plugin/plugin.json"
+  local s
+  for s in "$dir/skills"/* "$dir/memory/skills"/*; do
+    [[ -f "$s/SKILL.md" ]] && ln -sfn "$(readlink -f "$s")" "$cache/skills/skills/$(basename "$s")"
+  done
+  # Its MCP servers, from MCPorter's shape into Claude Code's.
+  python3 - "$dir/mcp.json" "$cache/mcp.json" <<'PY'
+import json, shlex, sys
+src, dst = sys.argv[1:]
+try:
+    servers = json.load(open(src)).get("mcpServers", {})
+except (OSError, ValueError):
+    servers = {}
+out = {}
+for name, s in servers.items():
+    url = s.get("url") or s.get("baseUrl")
+    if url:
+        out[name] = {"type": "sse" if s.get("type") == "sse" else "http", "url": url}
+        if s.get("headers"): out[name]["headers"] = s["headers"]
+    elif s.get("command"):
+        cmd = s["command"]
+        args = s.get("args")
+        if args is None: cmd, *args = shlex.split(cmd)
+        out[name] = {"command": cmd, "args": args}
+        if s.get("env"): out[name]["env"] = s["env"]
+json.dump({"mcpServers": out}, open(dst, "w"), indent=2)
+PY
+  {
+    cat "$dir/AGENTS.md"
+    cat <<P
+
+## Your memory on Claude Code
+
+This chat runs on Claude Code instead of Pi. Your memory is the same one
+your Pi chats use, and it is below. Claude Code's own memory is off.
+
+Save to it as you go, without being asked: when Vlad corrects you, states a
+preference, or you learn a fact that will matter later. One short fact per
+entry. Never save task progress or to-do items. Save with Bash:
+
+    $memtool $dir add user "<text>"      about Vlad: preferences, habits, corrections
+    $memtool $dir add memory "<text>"    tools, setup, how you work
+    $memtool $dir add project "<text>"   this project only
+    $memtool $dir replace <target> "<part of the old entry>" "<new text>"
+    $memtool $dir remove <target> "<part of the old entry>"
+
+If a save says the memory is full, merge or remove old entries first.
+
+P
+    "$memtool" "$dir" prompt
+  } > "$cache/prompt.md"
+  local settings
+  settings=$(python3 -c 'import json, sys; print(json.dumps({"autoMemoryEnabled": False, "permissions": {"allow": ["Bash(" + sys.argv[1] + ":*)"]}}))' "$memtool")
+  exec claude --append-system-prompt-file "$cache/prompt.md" \
+    --plugin-dir "$CLAUDE_MOD" --plugin-dir "$cache/skills" \
+    --settings "$settings" --strict-mcp-config "--mcp-config=$cache/mcp.json" "$@"
+}
+
 write_toc() {
   python3 - "$1" <<'TOC'
 import glob, json, os, sys
@@ -480,6 +551,7 @@ case "${1:-}" in
     cd "$dir"
     if [[ -f "$dir/$CLAUDE_CONF" ]]; then
       if [[ "${1:-}" == --kimchi ]]; then echo "$name runs on Claude Code; only Pi minions run on Kimchi" >&2; exit 1; fi
+      if [[ "${1:-}" == --claude ]]; then shift; fi
       if [[ "${1:-}" == chats || "${1:-}" =~ ^@[0-9]+$ ]]; then
         echo "$name runs on Claude Code: pick a past chat with minion $name -r" >&2; exit 1
       fi
@@ -497,6 +569,7 @@ case "${1:-}" in
       [[ "$effort" != - ]] && args+=(--effort "$effort")
       exec claude "${args[@]}" "$@"
     fi
+    if [[ "${1:-}" == --claude ]]; then shift; run_pi_on_claude "$name" "$dir" "$@"; fi
     harness=pi
     if [[ "${1:-}" == --kimchi ]]; then harness=kimchi; shift; fi
     # --no-context-files stops Pi from also loading CLAUDE.md/AGENTS.md
