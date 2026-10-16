@@ -1,0 +1,10 @@
+{
+  "name": "pi-minion-gbrain",
+  "version": "0.1.0",
+  "description": "Gives a Pi minion its own GBrain: memory tools, recall before each prompt and each chat saved when it ends",
+  "license": "MIT",
+  "private": true,
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
