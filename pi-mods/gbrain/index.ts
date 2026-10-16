@@ -87,7 +87,9 @@ function serverNotUp(home: string): boolean {
 	try {
 		const lines = readFileSync(join(home, ".gbrain/integrations/hooks/heartbeat.jsonl"), "utf8").trim().split("\n");
 		const last = JSON.parse(lines[lines.length - 1]);
-		return last.event === "user-prompt" && last.reason === "ipc_unavailable";
+		// no_serve: the server has not written its secret yet;
+		// ipc_unavailable: it has, but is not answering yet.
+		return last.event === "user-prompt" && (last.reason === "no_serve" || last.reason === "ipc_unavailable");
 	} catch {
 		return false;
 	}
