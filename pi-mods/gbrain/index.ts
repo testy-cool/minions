@@ -157,16 +157,25 @@ export default function (pi: any) {
 	});
 
 	pi.on("session_shutdown", async (event: any, ctx: any) => {
-		// A reload keeps the same chat going; every other reason ends it.
-		if (event?.reason === "reload") return;
-		const file = ctx.sessionManager?.getSessionFile?.();
-		if (typeof file !== "string" || !existsSync(file)) return;
-		// Detached, so Pi exits without waiting. Re-importing an unchanged
-		// chat is free; a chat continued later is imported again.
+		// Only on quit. On /new, /resume or /fork Pi keeps running and its
+		// brain server keeps the brain locked, so the import would fail;
+		// that chat is caught at the next quit instead.
+		if (event?.reason !== "quit") return;
+		const sessions = ctx.sessionManager?.getSessionDir?.();
+		if (typeof sessions !== "string" || !existsSync(sessions)) return;
+		// Every chat touched in the last week, which also catches chats from
+		// runs that crashed. Re-importing an unchanged chat is free; a chat
+		// that changed is imported again and its facts are replaced.
+		// Detached, so Pi exits without waiting; it starts once the brain
+		// server has let go of the brain.
 		const log = join(home, "capture.log");
-		const script = `echo "== $(date -Is) $2" >> "$3"; "$1" transcripts ingest "$2" --format openclaw --facts >> "$3" 2>&1`;
+		const script = [
+			'sleep 2; echo "== $(date -Is) quit" >> "$3"',
+			'files=$(find "$2" -maxdepth 1 -name "*.jsonl" -mtime -7)',
+			'[ -n "$files" ] && "$1" transcripts ingest $files --format openclaw --facts >> "$3" 2>&1',
+		].join("; ");
 		try {
-			const child = spawn("sh", ["-c", script, "sh", bin, file, log], { env, stdio: "ignore", detached: true });
+			const child = spawn("sh", ["-c", script, "sh", bin, sessions, log], { env, stdio: "ignore", detached: true });
 			child.on("error", () => {});
 			child.unref();
 		} catch {}
